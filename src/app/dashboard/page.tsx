@@ -1,7 +1,7 @@
 'use client';
 
 import { signOut } from '@/actions/auth';
-import { DropzoneArea } from '@/components/dropzone-area';
+// import { DropzoneArea } from '@/components/dropzone-area';
 import { TransactionList } from '@/components/transaction-list';
 import { Button } from '@/components/ui/button';
 import SmsXmlReader from '@/components/xmlfileread';
@@ -42,9 +42,10 @@ export default function Home() {
 
       {/* Main Content */}
       <main className='max-w-2xl mx-auto pt-24 pb-10 px-4'>
-        <DropzoneArea />
-        <TransactionList />
+        {/* <DropzoneArea /> */}
         <SmsXmlReader />
+
+        <TransactionList />
       </main>
     </div>
   );

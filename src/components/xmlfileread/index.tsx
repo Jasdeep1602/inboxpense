@@ -1,160 +1,38 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { XMLParser } from 'fast-xml-parser';
-import { extractTransactionsFromSMS } from '@/lib/extractTransactions';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTransactionStore } from '@/store/transactionStore';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Transaction, DriveFile, CacheData } from '@/types';
+import { Transaction, DriveFile } from '@/types';
 import { CACHE_KEY, CACHE_TTL } from '@/lib/constants';
+
+// Import the utils
+import { CacheManager } from '@/lib/cache';
+import { XMLProcessor } from '@/lib/xmlProcessor';
+import { FileManager } from '@/lib/fileUtils';
+import { DriveService } from '@/lib/driveService';
 
 export default function SmsXmlReader() {
   const [latestFile, setLatestFile] = useState<DriveFile | null>(null);
+  const [lastFetched, setLastFetched] = useState<number | null>(null);
   const [status, setStatus] = useState<
     'idle' | 'loading' | 'success' | 'error'
   >('idle');
   const [debugInfo, setDebugInfo] = useState<string>('');
+
   // Store actions
   const setTransactions = useTransactionStore((state) => state.setTransactions);
 
-  // Get cached data with proper null checks
-  const getCache = useCallback((): CacheData | null => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const cached = localStorage.getItem(CACHE_KEY);
-      return cached ? (JSON.parse(cached) as CacheData) : null;
-    } catch (error) {
-      console.error('Cache read error:', error);
-      return null;
-    }
-  }, []);
-
-  // Set cache data with type validation
-  const setCache = useCallback(
-    (data: Partial<CacheData>): void => {
-      if (typeof window === 'undefined') return;
-      try {
-        const currentCache = getCache() || {
-          files: [],
-          transactions: [],
-          lastUpdated: 0,
-        };
-        const newCache: CacheData = {
-          files: data.files || currentCache.files,
-          transactions: data.transactions || currentCache.transactions,
-          lastUpdated: data.lastUpdated ?? Date.now(),
-        };
-        localStorage.setItem(CACHE_KEY, JSON.stringify(newCache));
-        console.log('Cache updated:', {
-          filesCount: newCache.files.length,
-          transactionsCount: newCache.transactions.length,
-          lastUpdated: new Date(newCache.lastUpdated).toISOString(),
-        });
-      } catch (error) {
-        console.error('Cache write error:', error);
-      }
-    },
-    [getCache]
-  );
-
-  // Process XML content with proper typing and debugging
-  const processXmlContent = useCallback((content: string): Transaction[] => {
-    try {
-      console.log('Processing XML content, length:', content.length);
-
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        isArray: (name) => name === 'sms',
-      });
-
-      const parsed = parser.parse(content);
-      console.log('Parsed XML structure:', {
-        hasSmses: !!parsed?.smses,
-        smsCount: parsed?.smses?.sms?.length || 0,
-        firstSms: parsed?.smses?.sms?.[0] || 'No SMS found',
-      });
-
-      const smsList = parsed?.smses?.sms || [];
-
-      if (!Array.isArray(smsList)) {
-        console.warn('SMS list is not an array:', smsList);
-        return [];
-      }
-
-      console.log(
-        'Extracting transactions from',
-        smsList.length,
-        'SMS messages'
-      );
-      const transactions = extractTransactionsFromSMS(smsList);
-
-      console.log('Extracted transactions:', {
-        count: transactions.length,
-        sample: transactions.slice(0, 3),
-      });
-
-      setDebugInfo(
-        `Processed ${smsList.length} SMS messages, found ${transactions.length} transactions`
-      );
-
-      return transactions;
-    } catch (error) {
-      console.error('XML parsing error:', error);
-      setDebugInfo(
-        `XML parsing failed: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
-      );
-      throw new Error('Failed to parse XML content');
-    }
-  }, []);
-
-  // Fetch files with proper error handling and typing
-  const fetchFiles = useCallback(async (): Promise<DriveFile[]> => {
-    const cache = getCache();
-
-    // Return cached files if valid
-    if (
-      cache?.files &&
-      cache.lastUpdated &&
-      Date.now() - cache.lastUpdated < CACHE_TTL
-    ) {
-      console.log('Using cached files list:', cache.files.length, 'files');
-      return cache.files;
-    }
-
-    try {
-      console.log('Fetching files from Google Drive...');
-      const { listSmsFiles } = await import('@/utils/google-drive');
-      const files = await listSmsFiles();
-      console.log('Fetched files:', files.length);
-      setCache({ files });
-      return files;
-    } catch (error) {
-      console.error('Failed to fetch files:', error);
-      // Return empty array if we can't fetch new files and have no cache
-      return cache?.files || [];
-    }
-  }, [getCache, setCache]);
-
-  // Fetch file content with proper typing
-  const fetchFileContent = useCallback(
-    async (fileId: string): Promise<string> => {
-      try {
-        console.log('Fetching file content for ID:', fileId);
-        const { getFileContent } = await import('@/utils/google-drive');
-        const content = await getFileContent(fileId);
-        console.log('File content length:', content.length);
-        return content;
-      } catch (error) {
-        console.error('Failed to fetch file content:', error);
-        throw error;
-      }
-    },
+  // Initialize services with useMemo to prevent recreation on every render
+  const cacheManager = useMemo(
+    () => new CacheManager(CACHE_KEY, CACHE_TTL),
     []
+  );
+  const xmlProcessor = useMemo(() => new XMLProcessor(), []);
+  const driveService = useMemo(
+    () => new DriveService(cacheManager),
+    [cacheManager]
   );
 
   // Main processing function with proper error handling
@@ -163,48 +41,43 @@ export default function SmsXmlReader() {
     setDebugInfo('Starting to fetch and process files...');
 
     try {
-      const files = await fetchFiles();
+      const files = await driveService.fetchFiles();
       if (!files.length) {
         throw new Error('No SMS backup files found');
       }
 
-      const latest = files.reduce((prev, current) =>
-        prev.name > current.name ? prev : current
-      );
+      const latest = FileManager.getLatestFile(files);
+      if (!latest) {
+        throw new Error('No valid SMS backup file found');
+      }
+
       setLatestFile(latest);
       console.log('Latest file selected:', latest.name);
 
-      const cache = getCache();
       let transactions: Transaction[] = [];
 
-      if (
-        cache?.transactions &&
-        cache.transactions.length > 0 &&
-        cache.lastUpdated &&
-        Date.now() - cache.lastUpdated < CACHE_TTL
-      ) {
-        // Use cached transactions if available, fresh, and not empty
-        transactions = cache.transactions;
+      // Check if we should use cached data
+      if (cacheManager.hasData() && cacheManager.isValid()) {
+        const cache = cacheManager.get();
+        transactions = cache!.transactions;
         console.log('Using cached transactions:', transactions.length);
         setDebugInfo(`Using cached data: ${transactions.length} transactions`);
+        // Update the lastFetched from cache
+        setLastFetched(cache!.lastUpdated);
       } else {
         // Otherwise fetch and process new content
         setDebugInfo('Fetching new content...');
-        console.log('Cache status:', {
-          hasTransactions: !!cache?.transactions,
-          transactionCount: cache?.transactions?.length || 0,
-          lastUpdated: cache?.lastUpdated
-            ? new Date(cache.lastUpdated).toISOString()
-            : 'never',
-          cacheAge: cache?.lastUpdated ? Date.now() - cache.lastUpdated : 'n/a',
-          cacheTTL: CACHE_TTL,
-        });
+        console.log('Cache status:', cacheManager.getStatus());
 
-        const content = await fetchFileContent(latest.id);
-        transactions = processXmlContent(content);
+        const content = await driveService.fetchFileContent(latest.id);
+        const result = xmlProcessor.processXmlContent(content);
 
-        // Always cache the result, even if empty (but log it)
-        setCache({ transactions });
+        transactions = result.transactions;
+        setDebugInfo(result.debugInfo);
+
+        // Cache the result and update lastFetched
+        cacheManager.set({ transactions });
+        setLastFetched(Date.now());
 
         if (transactions.length === 0) {
           console.warn('No transactions found after processing');
@@ -226,42 +99,21 @@ export default function SmsXmlReader() {
       setDebugInfo(`Error: ${errorMessage}`);
       toast.error(errorMessage);
     }
-  }, [
-    fetchFiles,
-    fetchFileContent,
-    processXmlContent,
-    setCache,
-    setTransactions,
-    getCache,
-  ]);
+  }, [cacheManager, xmlProcessor, driveService, setTransactions]);
 
   // Initial load
   useEffect(() => {
     fetchAndProcessLatestFile();
   }, [fetchAndProcessLatestFile]);
 
-  // Format timestamp from filename
-  const formatFileName = useCallback((name: string): string => {
-    const match = name.match(
-      /sms-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.xml/
-    );
-    if (!match) return name;
-
-    const [_, year, month, day, hour, minute, second] = match;
-    return new Date(
-      `${year}-${month}-${day}T${hour}:${minute}:${second}`
-    ).toLocaleString();
-  }, []);
-
   const handleRefresh = useCallback(
     async (force = false): Promise<void> => {
       if (force) {
-        localStorage.removeItem(CACHE_KEY);
-        console.log('Cache cleared');
+        cacheManager.clear();
       }
       await fetchAndProcessLatestFile();
     },
-    [fetchAndProcessLatestFile]
+    [fetchAndProcessLatestFile, cacheManager]
   );
 
   if (status === 'loading') {
@@ -297,7 +149,7 @@ export default function SmsXmlReader() {
 
       {latestFile && (
         <div className='text-sm text-gray-600'>
-          {formatFileName(latestFile.name)}
+          {FileManager.formatFileName(latestFile.name)}
         </div>
       )}
 
@@ -308,6 +160,13 @@ export default function SmsXmlReader() {
           'Loading transaction data...'
         )}
       </div>
+
+      {/* Display last fetched time */}
+      {lastFetched && (
+        <div className='mt-1 text-xs text-gray-400'>
+          Last fetched: {new Date(lastFetched).toLocaleString()}
+        </div>
+      )}
 
       {debugInfo && (
         <div className='mt-2 text-xs text-gray-400 bg-gray-50 p-2 rounded'>
