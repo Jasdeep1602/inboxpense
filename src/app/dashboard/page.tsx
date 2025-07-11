@@ -4,6 +4,7 @@ import { signOut } from '@/actions/auth';
 import { DropzoneArea } from '@/components/dropzone-area';
 import { TransactionList } from '@/components/transaction-list';
 import { Button } from '@/components/ui/button';
+import SmsXmlReader from '@/components/xmlfileread';
 import { useRouter } from 'next/navigation';
 
 export default function Home() {
@@ -43,6 +44,7 @@ export default function Home() {
       <main className='max-w-2xl mx-auto pt-24 pb-10 px-4'>
         <DropzoneArea />
         <TransactionList />
+        <SmsXmlReader />
       </main>
     </div>
   );

@@ -9,9 +9,13 @@ export async function signInwithGoogle(redirectTo: string) {
     provider: 'google',
     options: {
       redirectTo: redirectURL,
+      scopes: 'https://www.googleapis.com/auth/drive.readonly', // Read-only access
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
     },
   });
-
   if (error) {
     console.error('Error signing in with Google:', error);
     throw new Error('Failed to sign in with Google');

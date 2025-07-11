@@ -13,3 +13,13 @@ export interface MonthlyGroup {
   totalDebit: number;
   transactions: Transaction[];
 }
+
+export interface DriveFile {
+  id: string;
+  name: string;
+}
+export interface CacheData {
+  files: DriveFile[];
+  transactions: Transaction[];
+  lastUpdated: number;
+}
